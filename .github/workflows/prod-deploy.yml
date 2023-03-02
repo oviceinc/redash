@@ -1,0 +1,63 @@
+name: Production Build
+
+on:
+  push:
+    branches:
+      - master
+      - showwin/auto_build
+
+env:
+  AWS_REGION: ap-northeast-1
+  ECR_REPOSITORY: 115737217453.dkr.ecr.ap-northeast-1.amazonaws.com/redash
+
+permissions: write-all
+
+jobs:
+  build-and-push-ecr:
+    name: Build Image and Push to ECR
+    runs-on: ubuntu-latest
+    # Reusable workflows do not play nice with Env variables yet, hence we use outputs instead. See
+    # https://github.com/actions/runner/issues/1661
+    # https://github.com/orgs/community/discussions/26671
+    outputs:
+      image_tag: ${{ steps.image_tag.outputs.IMAGE_TAG }}
+      image_repo: ${{ env.ECR_REPOSITORY }}
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set Image Tag
+        id: image_tag
+        run: |
+          echo "IMAGE_TAG=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+          echo "IMAGE_TAG=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          role-to-assume: arn:aws:iam::115737217453:role/DeployBot
+          aws-region: ${{ env.AWS_REGION }}
+          mask-aws-account-id: 'no'
+
+      - name: Docker build, scan and push
+        uses: oviceinc/actions/docker-scanner@main
+        with:
+          AWS_ECR_REPO_URL: ${{ env.ECR_REPOSITORY }}
+          IMAGE_TAG: ${{ env.IMAGE_TAG }}
+          DOCKER_PLATFORMS: linux/amd64
+          DOCKER_CONTEXT: .
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL_VULNERABILITIES }}
+
+  # deploy:
+  #   needs:
+  #     - build-and-push-ecr
+  #   name: Deploy Argocd
+  #   uses: oviceinc/actions/.github/workflows/argocd-deploy-production.yml@main
+  #   with:
+  #     argocd_app_name: data-tracker
+  #     environment: production
+  #     cluster_name: production
+  #     image_name: data-tracker-image
+  #     image_repo: ${{ needs.build-and-push-ecr.outputs.image_repo }}
+  #     image_tag: ${{ needs.build-and-push-ecr.outputs.image_tag }}
+  #     kustomization_directory: deploy/overlays/prod
+  #   secrets: inherit
